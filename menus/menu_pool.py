@@ -70,12 +70,12 @@ class MenuPool(object):
         
     def discover_menus(self):
         if self.discovered:
--            return    
--        for app in settings.INSTALLED_APPS:
--            try:
--                import_module('.menu', app)
--            except ImportError:
--                pass
+            return    
+        for app in settings.INSTALLED_APPS:
+            try:
+                import_module('.menu', app)
+            except ImportError:
+                pass
         from menus.modifiers import register
         register()
         self.discovered = True
