@@ -88,13 +88,13 @@ class MenuPool(object):
         cache.delete_many(to_be_deleted)
         cache_keys.delete()
     
-    def register_menu(self, menu):
+    def register_menu(self, menu, cache=True):
         from menus.base import Menu
         assert issubclass(menu, Menu)
         if menu.__name__ in self.menus.keys():
             raise NamespaceAllreadyRegistered(
                 "[%s] a menu with this name is already registered" % menu.__name__)
-        self.menus[menu.__name__] = menu()
+        self.menus[(menu.__name__, cache)] = menu()
 
     def register_modifier(self, modifier_class):
         from menus.base import Modifier
@@ -120,27 +120,32 @@ class MenuPool(object):
                 the node is put at the bottom of the list
         """
         # Cache key management
-        lang = get_language()
-        prefix = getattr(settings, "CMS_CACHE_PREFIX", "menu_cache_")
-        key = "%smenu_nodes_%s_%s" % (prefix, lang, site_id)
-        if request.user.is_authenticated():
-            key += "_%s_user" % request.user.pk
-        cached_nodes = cache.get(key, None)
-        if cached_nodes:
-            return cached_nodes
-        
+        duration = getattr(settings, "MENU_CACHE_DURATION", 60*60)
         final_nodes = []
-        for menu_class_name in self.menus:
-            nodes = self.menus[menu_class_name].get_nodes(request)
+        for menu_class_name, cached in self.menus:
+            # Cache key management
+            lang = get_language()
+            prefix = getattr(settings, "CMS_CACHE_PREFIX", "menu_cache_")
+            key = "%smenu_nodes_%s_%s_%s" % (prefix, lang, site_id, menu_class_name)
+            if cached:
+                cached_nodes = cache.get(key, None)
+                if cached_nodes:
+                    final_nodes += cached_nodes
+                    continue
+
+            nodes = _build_nodes_inner_for_one_menu(
+                self.menus[(menu_class_name, cached)].get_nodes(request),
+                menu_class_name)
             # nodes is a list of navigation nodes (page tree in cms + others)
-            final_nodes += _build_nodes_inner_for_one_menu(nodes, menu_class_name)
-        cache.set(key, final_nodes, settings.CMS_CACHE_DURATIONS['menus'])
-        # We need to have a list of the cache keys for languages and sites that
-        # span several processes - so we follow the Django way and share through 
-        # the database. It's still cheaper than recomputing every time!
-        # This way we can selectively invalidate per-site and per-language, 
-        # since the cache shared but the keys aren't 
-        CacheKey.objects.create(key=key, language=lang, site=site_id)
+            final_nodes += nodes
+            if cached:
+                cache.set(key, nodes, duration)
+                # We need to have a list of the cache keys for languages and sites that
+                # span several processes - so we follow the Django way and share through 
+                # the database. It's still cheaper than recomputing every time!
+                # This way we can selectively invalidate per-site and per-language, 
+                # since the cache shared but the keys aren't 
+                CacheKey.objects.create(key=key, language=lang, site=site_id)
         return final_nodes
 
     def apply_modifiers(self, nodes, request, namespace=None, root_id=None, post_cut=False, breadcrumb=False):
@@ -184,7 +189,7 @@ class MenuPool(object):
         found = []
         for menu in self.menus.items():
             if hasattr(menu[1], name) and getattr(menu[1], name, None) == value:
-                found.append((menu[0], menu[1].name))
+                found.append((menu[0][0], menu[1].name))
         return found
 
     def get_nodes_by_attribute(self, nodes, name, value):
